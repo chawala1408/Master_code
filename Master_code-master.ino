@@ -1,6 +1,6 @@
 #include "MicMMS.h"
 
-#define Version_coding "1.0.0"
+#define Version_coding "1.0.1"
 /*------------------- Information Program -------------------*/
 //  MicMMS version 1.0.0  (Version code)
 /*----------------------------------------------------------*/
