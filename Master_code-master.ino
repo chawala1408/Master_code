@@ -7,7 +7,7 @@
 /*------------------- Data list -------------------*/
 // MicMMS aaa(WiFi_name, Password, Mqtt_server, Mqtt_port,/Department/Process/,Machine_number, SlaveID, SerialPort,IP_Address,Gate_way,Subnet_mask,Version_coding);
 /*-------------------------------------------------*/
-MicMMS aaa("MIC_Iot", "Micdev@2024", "192.168.0.128", 1883, "/mic/test/", "a001", 1, Serial1, "192.168.0.100", "192.168.0.1", "255.255.255.0", "1.0.2");
+MicMMS aaa("MIC_Iot", "Micdev@2024", "192.168.0.128", 1883, "/mic/test/", "a001", 1, Serial1, "192.168.0.100", "192.168.0.1", "255.255.255.0", "1.0.0");
 
 void setup() {
   aaa.init();
