@@ -1,5 +1,5 @@
 /*------------------- Information Program -------------------*/
-//  MicMMS version 1.0.0  (Version code)
+//  MicMMS version 2.0.3  (Version code)
 /*----------------------------------------------------------*/
 
 #include "HardwareSerial.h"
@@ -17,10 +17,12 @@ MicMMS::MicMMS(const char* ssid, const char* password, const char* mqtt_server, 
 void MicMMS::setupWiFi() {
   int MinRSSI = -85;
   int bestNetworkIndex = -1;
+  unsigned long startAttemptTime = millis();
 
+  WiFi.disconnect(true);  // delete old config
+  WiFi.mode(WIFI_OFF);
+  delay(SaveDisconnectTime);  // 1000ms seems to work in most cases, may depend on AP
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect(true);      // delete old config
-  delay(SaveDisconnectTime);  // 500ms seems to work in most cases, may depend on AP
 
   Serial.println("Scanning for WiFi networks...");
   int n = WiFi.scanNetworks();  // WiFi.scanNetworks will return the number of networks found
@@ -32,7 +34,7 @@ void MicMMS::setupWiFi() {
   //   Serial.printf("%d networks found:\n", n);
   //   for (int i = 0; i < n; ++i) {
   //     // Print SSID and RSSI for each network found
-  //     // Serial.printf("%d: %s, Signal: %d dBm %d %%, BSSID: %s\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), constrain(2 * (WiFi.RSSI() + 100), 0, 100), WiFi.BSSIDstr(i).c_str());
+  //     // Serial.printf("%d: %s, Signal: %d dBm, BSSID: %s, Channel: %d\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.BSSIDstr(i).c_str(), WiFi.channel(i));
   //   }
   // }
   // Find the network with the best RSSI value
@@ -47,17 +49,23 @@ void MicMMS::setupWiFi() {
   }
   // Connect to the network with the best RSSI value
   if (bestNetworkIndex != -1) {
-    Serial.printf("Best AP Connection:%s, Signal: %d dBm, BSSID: %s\n", WiFi.SSID(bestNetworkIndex).c_str(), WiFi.RSSI(bestNetworkIndex), WiFi.BSSIDstr(bestNetworkIndex).c_str());
+    Serial.printf("Best AP Connection:%s, Signal: %d dBm, BSSID: %s, Channel: %d\n", WiFi.SSID(bestNetworkIndex).c_str(), WiFi.RSSI(bestNetworkIndex), WiFi.BSSIDstr(bestNetworkIndex).c_str(), WiFi.channel(bestNetworkIndex));
     // Connect to the selected AP
     WiFi.config(ip, gateway, subnet);
     WiFi.begin(ssid, password, 0, WiFi.BSSID(bestNetworkIndex));
 
     while (WiFi.status() != WL_CONNECTED) {
+      // printf("WiFi status is %d\n", WiFi.status());
       Serial.println("Connecting WiFi Fail,Restarting...");
       digitalWrite(Pinled2, HIGH);
       delay(100);
       digitalWrite(Pinled2, LOW);
       delay(1000);
+      if ((millis() - startAttemptTime) >= 15000) {  // Check WiFi.status() 15s
+        WiFi.reconnect();
+        WiFi.begin(ssid, password, 0, WiFi.BSSID(bestNetworkIndex));
+        startAttemptTime = millis();
+      }
     }
     if ((WiFi.status() == WL_CONNECTED)) {
       Serial.println("Connected to WiFi Completed");
@@ -73,20 +81,14 @@ void MicMMS::setupWiFi() {
 }
 
 void MicMMS::reconnect() {
-  char topic_sub[30];
-  strcpy(topic_sub, topic_pub_1);
-  strcat(topic_sub, dp_name);
-  strcat(topic_sub, mac_no);
-
   if (!mqttClient.connected()) {
     Serial.println("Attempting MQTT connection...");
-    String clientId = "ESP32Client";
+    String clientId = "ESP32Client_";
     clientId += mac_no;
+    clientId += String(random(0xffff), HEX);  // ESP32Client_mc_no0xa12f the "0xa12f" is random number form "HEX"
     if (mqttClient.connect(clientId.c_str())) {
       Serial.println("Connected to MQTT Broker");
       digitalWrite(Pinled1, LOW);  // Broker connected!!
-      /*----- Subscribe data return from server -----*/
-      mqttClient.subscribe(topic_sub);
     } else {
       printf("Failed with state %d\n", mqttClient.state());
       if (mqttClient.state() == -2) {
@@ -103,54 +105,77 @@ void MicMMS::init() {
   pinMode(Pinled2, OUTPUT);  //Connect
 
   Serial.begin(115200);
-  Serial1.begin(115200, SERIAL_8N1, 18, 17);
+  /*---- Pin ESP32S2 for Serial RS232 UART Rx 18, Tx 17 ----*/
+  Serial1.begin(115200, SERIAL_8N1, /*rx =*/rsRx, /*tx =*/rsTx);
+  setupWiFi();
   Serial.print("MAC address: ");
   Serial.println(WiFi.macAddress());
-  setupWiFi();
   Serial.print("IP address IoT Box: ");
   Serial.println(WiFi.localIP());
   mqttClient.setServer(mqtt_server, mqtt_port);
+  mqttClient.setBufferSize(1024);   // Config the size, in bytes, of the internal send/receive buffer
+  mqttClient.setKeepAlive(30);      // Config Keep-alive 30s
+  mqttClient.setSocketTimeout(10);  // Config Socket timeout 10s
+
   digitalWrite(Pinled2, HIGH);
   init_heap = esp_get_free_heap_size();
   modbus.start();
 }
 
-void MicMMS::publishMessage(char* topic, const char* message) {
+bool MicMMS::publishMessage(char* topic, const char* message) {
   if (mqttClient.publish(topic, message)) {
     digitalWrite(Pinled1, HIGH);
     delay(100);
     digitalWrite(Pinled1, LOW);
+    return true;
+  } else {
+    return false;
   }
 }
 
 void MicMMS::run() {
   modbus.poll(got_data, num_got_data);
-  mqttClient.loop();
 }
 
 void MicMMS::start() {
-  xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
-  xTaskCreatePinnedToCore(Network_Task, "Task1", 10000, this, 6, NULL, 0);
-  xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, this, 5, NULL, 0);
-  xTaskCreatePinnedToCore(func2_Task, "Task3", 10000, this, 4, NULL, 0);
-  xTaskCreatePinnedToCore(func3_Task, "Task4", 10000, this, 3, NULL, 0);
-  xTaskCreatePinnedToCore(broke_modbus_Task, "Task5", 10000, this, 2, NULL, 0);
-  xTaskCreatePinnedToCore(esp_Task, "Task6", 10000, this, 1, NULL, 0);
+  if (ESP32 == 2) {
+    Serial.println("Running on ESP32-S2");
+    xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
+    xTaskCreatePinnedToCore(Network_Task, "Task1", 10000, this, 6, NULL, 0);
+    xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, this, 5, NULL, 0);
+    xTaskCreatePinnedToCore(func2_Task, "Task3", 10000, this, 4, NULL, 0);
+    xTaskCreatePinnedToCore(func3_Task, "Task4", 10000, this, 3, NULL, 0);
+    xTaskCreatePinnedToCore(broke_modbus_Task, "Task5", 10000, this, 2, NULL, 0);
+    xTaskCreatePinnedToCore(esp_Task, "Task6", 10000, this, 1, NULL, 0);
+  } else if (ESP32 == 3) {
+    Serial.println("Running on ESP32-S3");
+    xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
+    xTaskCreatePinnedToCore(Network_Task, "Task1", 10000, this, 6, NULL, 1);
+    xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, this, 5, NULL, 0);
+    xTaskCreatePinnedToCore(func2_Task, "Task3", 10000, this, 4, NULL, 0);
+    xTaskCreatePinnedToCore(func3_Task, "Task4", 10000, this, 3, NULL, 0);
+    xTaskCreatePinnedToCore(broke_modbus_Task, "Task5", 10000, this, 2, NULL, 0);
+    xTaskCreatePinnedToCore(esp_Task, "Task6", 10000, this, 1, NULL, 0);
+    /*} else if (ESP32 == 4) {
+    Serial.println("Running on ESP32-C6");*/
+  } else {
+    Serial.println("Unknown ESP32 variant");
+  }
 }
 
-// Sent data from Modbus to table def_tb
 void MicMMS::modbus_Task(void* pvParam) {
+  MicMMS* instance = (MicMMS*)pvParam;
   while (1) {
     //record raw data to table
     unsigned long long int start = micros();
     for (int i = 0; i < sizeof(def_tb) / sizeof(def_tb[0]); i++) {
       def_tb[i][3] = got_data[(def_tb[i][1].toInt()) - 1];
     }
-    for (int i = 43; i < 55; i++) {
-      Serial.print(got_data[i]);
-      Serial.print(":");
-    }
-    Serial.println();
+    // for (int i = 43; i < 55; i++) {
+    //   Serial.print(got_data[i]);
+    //   Serial.print(":");
+    // }
+    // Serial.println();
     ct_read = micros() - start;
     //interval work loop 550-600 microsec
     vTaskDelay(pdMS_TO_TICKS(itr_modbus));  //loop get value every 100 sec
@@ -161,6 +186,8 @@ void MicMMS::Network_Task(void* pvParam) {
   MicMMS* instance = (MicMMS*)pvParam;
 
   while (1) {
+    /*-------- Check Mqtt Client alive --------*/
+    instance->mqttClient.loop();
     /*-------- Check Internet & Server MQTT --------*/
     if ((WiFi.status() != WL_CONNECTED)) {
       digitalWrite(Pinled2, HIGH);
@@ -175,11 +202,11 @@ void MicMMS::Network_Task(void* pvParam) {
   }
 }
 
-// Data productions part
 void MicMMS::func1_Task(void* pvParam) {
   MicMMS* instance = (MicMMS*)pvParam;
   MicMMS* dpName = (MicMMS*)(pvParam);
   MicMMS* macNo = (MicMMS*)(pvParam);
+
   char topic_pub[30];
   strcpy(topic_pub, topic_pub_1);
   strcat(topic_pub, dpName->dp_name);
@@ -189,7 +216,7 @@ void MicMMS::func1_Task(void* pvParam) {
     unsigned long long int start = micros();
     bool change_1 = false;
 
-    StaticJsonDocument<300> json_1;  // size = 30*topic [avg]
+    StaticJsonDocument<500> json_1;  // size = 30*topic [avg]
     // check data change
     for (int i = 0; i < sizeof(def_tb) / sizeof(def_tb[0]); i++) {
       if (def_tb[i][2] == "3" || def_tb[i][2] == "4") {
@@ -201,10 +228,11 @@ void MicMMS::func1_Task(void* pvParam) {
     }
 
     if (change_1 == true) {  // data change !!!
-      /*----------------- rssi value -----------------*/
+
+      /*----------- RSSI value -----------*/
       json_1["rssi"] = (float)WiFi.RSSI();
 
-      /*----------------- Production data -----------------*/
+      /*----------- Production data -----------*/
       for (int j = 0; j < (sizeof(def_tb) / sizeof(def_tb[0])); j++) {
         /*----------- Production data type a normal -----------*/
         if (def_tb[j][2] == "3") {
@@ -216,54 +244,57 @@ void MicMMS::func1_Task(void* pvParam) {
           json_1[String(def_tb[j][0])] = total_data;
           j++;
         }
-        /*----------------- Lot Number -----------------*/
+        /*----------------- ID Number -----------------*/
         if (def_tb[j][2] == "5") {
           if (def_tb[j][3].toInt() != 0) {
             String hex_ = String((def_tb[j][3]).toInt(), HEX);  //convert data to HEX and define -> String
-            String fristPart = hex_.substring(2, 4);            // Split data
+            String firstPart = hex_.substring(2, 4);            // Split data
             String secondPart = hex_.substring(0, 2);
-            long ascii_1 = strtol(fristPart.c_str(), NULL, 16);  //convert data HEX to DEC
+            long ascii_1 = strtol(firstPart.c_str(), NULL, 16);  //convert data HEX to DEC
             long ascii_2 = strtol(secondPart.c_str(), NULL, 16);
-            //Lot_num = String(ascii_1) + String(ascii_2);
-            //json_1[String(def_tb[m][0])] = Lot_num.toInt();  //Tx DEC to MQTT type json file
-            String Lot_num = String(char(ascii_1)) + String(char(ascii_2));
-            /*if((ascii_1 ==32) && (ascii_2 == 32)) {
-              Lot_ttl = "-";
-            }*/
-            Lot_ttl += Lot_num;
+            //Id_num = String(ascii_1) + String(ascii_2);
+            //json_1[String(def_tb[m][0])] = Id_num.toInt();  //Tx DEC to MQTT type json file
+            if (ascii_1 == 32) {
+              ascii_1 = 0;
+            }
+            if (ascii_2 == 32) {
+              ascii_2 = 0;
+            }
+            String Id_num = String(char(ascii_1)) + String(char(ascii_2));
+            Id_ttl += Id_num;
           }
         }
       }
-      json_1["lot"] = Lot_ttl;
+      json_1["id_num"] = Id_ttl;
 
-      /*----------------- Publish data -----------------*/
+      /*----------- Publish data -----------*/
       String json_topic1;
       serializeJson(json_1, json_topic1);
       // instance->publishMessage(mcNo->mc_no, json_topic1.c_str());
       instance->publishMessage(topic_pub, json_topic1.c_str());
       Serial.println(json_topic1);
-      for (int k = 0; k < sizeof(def_tb) / sizeof(def_tb[0]); k++) {
-        if (def_tb[k][2] == "3" || def_tb[k][2] == "4" || def_tb[k][2] == "5") {
-          def_tb[k][4] = def_tb[k][3];
-          if (def_tb[k][2] == "5") {
-            if (def_tb[k][3].toInt() != 0) {
-              Lot_ttl = '\0';
+      for (int p = 0; p < sizeof(def_tb) / sizeof(def_tb[0]); p++) {
+        if (def_tb[p][2] == "3" || def_tb[p][2] == "4" || def_tb[p][2] == "5") {
+          def_tb[p][4] = def_tb[p][3];
+          if (def_tb[p][2] == "5") {
+            if (def_tb[p][3].toInt() != 0) {
+              Id_ttl = '\0';
             }
           }
         }
       }
       ct_fn1 = micros() - start;
     }
-    //interval work loop 120-150 ms
+    //interval work loop 100-120 ms
     vTaskDelay(pdMS_TO_TICKS(itr_fnc_1));  //check every 1 sec
   }
 }
 
-// Status part
 void MicMMS::func2_Task(void* pvParam) {
   MicMMS* instance = (MicMMS*)pvParam;
   MicMMS* dpName = (MicMMS*)(pvParam);
   MicMMS* macNo = (MicMMS*)(pvParam);
+
   char topic_pub[30];
   strcpy(topic_pub, topic_pub_2);
   strcat(topic_pub, dpName->dp_name);
@@ -289,7 +320,7 @@ void MicMMS::func2_Task(void* pvParam) {
     }
 
     StaticJsonDocument<300> json_2;
-    if (data_check1 == true) {  // data change and only one!!
+    if (data_check1 == true) {  // data change and only one and Date aren't "0"!!
       for (int i = 0; i < sizeof(def_tb) / sizeof(def_tb[0]); i++) {
         if (def_tb[i][2] == "1") {
           if (def_tb[i][3] == "1") {
@@ -304,6 +335,8 @@ void MicMMS::func2_Task(void* pvParam) {
       String json_topic2;
       serializeJson(json_2, json_topic2);
       instance->publishMessage(topic_pub, json_topic2.c_str());
+      Serial.println(json_topic2);
+
       prv_status = status;
       ct_fn2 = micros() - start;
     }
@@ -312,62 +345,61 @@ void MicMMS::func2_Task(void* pvParam) {
   }
 }
 
-// Alarm part
 void MicMMS::func3_Task(void* pvParam) {
   MicMMS* instance = (MicMMS*)pvParam;
   MicMMS* dpName = (MicMMS*)(pvParam);
   MicMMS* macNo = (MicMMS*)(pvParam);
+
   char topic_pub[30];
   strcpy(topic_pub, topic_pub_3);
   strcat(topic_pub, dpName->dp_name);
   strcat(topic_pub, macNo->mac_no);
-
   while (1) {
     unsigned long long int start = micros();
+    bool Ready_1 = false;
     StaticJsonDocument<300> json_3;
 
     /*------- alarm list and Publish data -------*/
-    for (int i = 0; i < sizeof(def_tb) / sizeof(def_tb[0]); i++) {
-      if (def_tb[i][2] == "2") {
-        if (def_tb[i][3] == "1" && def_tb[i][4] == "") {
-          alarm_ = def_tb[i][0];
+    for (int j = 0; j < sizeof(def_tb) / sizeof(def_tb[0]); j++) {
+      if (def_tb[j][2] == "2") {
+        if (def_tb[j][3] == "1" && def_tb[j][4] == "") {
+          alarm_ = def_tb[j][0];
           json_3["status"] = alarm_;
           String json_topic3;
           serializeJson(json_3, json_topic3);
           instance->publishMessage(topic_pub, json_topic3.c_str());
           Serial.println(json_topic3);
-          def_tb[i][4] = def_tb[i][3];
+          def_tb[j][4] = def_tb[j][3];
           ct_fn3 = micros() - start;
         }
-        if (def_tb[i][3] == "1" && def_tb[i][4] == "0") {
-          alarm_ = def_tb[i][0];
+        if (def_tb[j][3] == "1" && def_tb[j][4] == "0") {
+          alarm_ = def_tb[j][0];
           json_3["status"] = alarm_;
           String json_topic3;
           serializeJson(json_3, json_topic3);
           instance->publishMessage(topic_pub, json_topic3.c_str());
           Serial.println(json_topic3);
-          def_tb[i][4] = def_tb[i][3];
+          def_tb[j][4] = def_tb[j][3];
           ct_fn3 = micros() - start;
         }
-        if (def_tb[i][3] == "0" && def_tb[i][4] == "1") {
-          alarm_ = def_tb[i][0];
+        if (def_tb[j][3] == "0" && def_tb[j][4] == "1") {
+          alarm_ = def_tb[j][0];
           json_3["status"] = alarm_ + "_";
           String json_topic3;
           serializeJson(json_3, json_topic3);
           instance->publishMessage(topic_pub, json_topic3.c_str());
           Serial.println(json_topic3);
-          def_tb[i][4] = def_tb[i][3];
+          def_tb[j][4] = def_tb[j][3];
           ct_fn3 = micros() - start;
         }
       }
     }
-    //interval work loop 100-150 ms
+    //interval work loop 100-120 ms
     vTaskDelay(pdMS_TO_TICKS(itr_fnc_3));
   }
 }
 
-//Check version code, modbus and Broker alive
-void MicMMS::broke_modbus_Task(void* pvParam) {
+void MicMMS::broke_modbus_Task(void* pvParam) {  //Check modbus,Broker alive
   MicMMS* instance = (MicMMS*)pvParam;
   MicMMS* dpName = (MicMMS*)(pvParam);
   MicMMS* macNo = (MicMMS*)(pvParam);
@@ -384,7 +416,10 @@ void MicMMS::broke_modbus_Task(void* pvParam) {
     String json_topic4;
     if (instance->mqttClient.connected()) {
       bkr_connect = 1;
+    } else {
+      bkr_connect = 0;
     }
+    json_4["mac_id"] = WiFi.macAddress();
     json_4["broker"] = bkr_connect;
 
     query_check1 = instance->modbus.getInCnt();   //Get input messages counter value and return input messages counter
@@ -404,7 +439,7 @@ void MicMMS::broke_modbus_Task(void* pvParam) {
     json_4["modbus"] = modb_check;
     json_4["version"] = vrs_Code->vrs_code;  // code version
 
-    if (((bkr_connect == 1) && (tigger_1 == 1)) || ((start - prv_time_1) >= (5 * (60 * 1000)))) {  // Use tigger = 1 for Publish first time And Publish data every 30 mins.
+    if (((bkr_connect == 1) && (tigger_1 == 1)) || ((start - prv_time_1) >= (5 * (60 * 1000)))) {  // Use tigger = 1 for Publish first time And Publish data every 5 mins.
       serializeJson(json_4, json_topic4);
       instance->publishMessage(topic_pub, json_topic4.c_str());
       Serial.println(json_topic4);
@@ -415,8 +450,7 @@ void MicMMS::broke_modbus_Task(void* pvParam) {
   }
 }
 
-// Detect ESP status
-void MicMMS::esp_Task(void* pvParam) {
+void MicMMS::esp_Task(void* pvParam) {  //ESP status
   MicMMS* instance = (MicMMS*)pvParam;
   MicMMS* dpName = (MicMMS*)(pvParam);
   MicMMS* macNo = (MicMMS*)(pvParam);
