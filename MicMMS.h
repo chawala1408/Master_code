@@ -1,7 +1,7 @@
 #ifndef MICMMS_H
 #define MICMMS_H
 /*------------------- Information Program -------------------*/
-//  MicMMS version 1.0.0  (Version code)
+//  MicMMS version 2.0.3  (Version code)
 /*----------------------------------------------------------*/
 
 #include <Arduino.h>
@@ -35,7 +35,7 @@ public:
   void setupWiFi();
   void init();
   void reconnect();
-  void publishMessage(char* topic, const char* message);
+  bool publishMessage(char* topic, const char* message);
   void run();
   void start();
   static void modbus_Task(void* pvParam);
