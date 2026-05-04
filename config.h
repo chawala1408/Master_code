@@ -5,8 +5,8 @@
 /*----------------------------------------------------------*/
 
 #if CONFIG_IDF_TARGET_ESP32S2
-  #define Pinled1 41
-  #define Pinled2 42
+  #define Pinled1 42
+  #define Pinled2 41
 
 #elif CONFIG_IDF_TARGET_ESP32S3
   #define Pinled1 1
