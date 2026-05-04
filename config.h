@@ -4,8 +4,8 @@
 //  MicMMS version 2.0.3  (Version code)
 /*----------------------------------------------------------*/
 
-#define Pinled1 41      // LED for Detected the Publish data
-#define Pinled2 42      // LED for Connection Internet
+#define Pinled1 1      // LED for Detected the Publish data
+#define Pinled2 2      // LED for Connection Internet
 #define rsRx 18                  // Pin for Serial RS232/RS485 UART Rx 18
 #define rsTx 17                  // Pin for Serial RS232/RS485 UART Tx 17
 #define SaveDisconnectTime 1000  // Time in ms for save disconnection
