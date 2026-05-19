@@ -3,7 +3,7 @@
 /*----------------------------------------------------------*/
 
 #include "MicMMS.h"
-#include "conf.h"
+#include "config.h"
 #include "esp_system.h"
 
 MicMMS::MicMMS(const char* ssid, const char* password, const char* mqtt_server, int mqtt_port, const char* dp_name, const char* mac_no, const char* ip_address, const char* gateway_address, const char* subnet_mask, const char* ip_address1, const char* vrs_code)
