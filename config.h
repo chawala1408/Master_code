@@ -4,18 +4,9 @@
 //  MicMMS version 2.0.3  (Version code)
 /*----------------------------------------------------------*/
 
-#if CONFIG_IDF_TARGET_ESP32S2
-  #define Pinled1 41
-  #define Pinled2 42
+#define Pinled1 41
+#define Pinled2 42
 
-#elif CONFIG_IDF_TARGET_ESP32S3
-  #define Pinled1 1
-  #define Pinled2 2
-
-#else
-  #define Pinled1 1
-  #define Pinled2 2
-#endif
 #define rsRx 18                  // Pin for Serial RS232/RS485 UART Rx 18
 #define rsTx 17                  // Pin for Serial RS232/RS485 UART Tx 17
 #define SaveDisconnectTime 1000  // Time in ms for save disconnection
