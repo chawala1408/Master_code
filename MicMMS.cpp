@@ -6,9 +6,9 @@
 #include "config.h"
 #include "esp_system.h"
 
-MicMMS::MicMMS(const char* ssid, const char* password, const char* mqtt_server, int mqtt_port, const char* dp_name, const char* mac_no, const char* ip_address, const char* gateway_address, const char* subnet_mask, const char* ip_address1, const char* vrs_code)
-  : wifiClient(), mqttClient(wifiClient), ssid(ssid), password(password), mqtt_server(mqtt_server), mqtt_port(mqtt_port), dp_name(dp_name), mac_no(mac_no), vrs_code(vrs_code) {
-  ip.fromString(ip_address);  // Fix IP config for IIoT Box
+MicMMS::MicMMS(const char* ssid, const char* password, const char* mqtt_server, int mqtt_port, const char* dp_name, const char* mac_no, int slaveId, HardwareSerial& serialPort, const char* ip_address, const char* gateway_address, const char* subnet_mask, const char* vrs_code)
+  : wifiClient(), mqttClient(wifiClient), ssid(ssid), password(password), mqtt_server(mqtt_server), mqtt_port(mqtt_port), dp_name(dp_name), mac_no(mac_no), slaveId(slaveId), serialPort(serialPort), modbus(slaveId, serialPort, 0), vrs_code(vrs_code) {
+  ip.fromString(ip_address);
   gateway.fromString(gateway_address);
   subnet.fromString(subnet_mask);
   ip1.fromString(ip_address1);  // IP for Rx Data from GOT
