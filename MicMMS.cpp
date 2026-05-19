@@ -1,17 +1,17 @@
 /*------------------- Information Program -------------------*/
-//  MicMMS version 2.0.3
+//  MicMMS version 2.0.3  (Version code)
 /*----------------------------------------------------------*/
 
+#include "HardwareSerial.h"
+#include "esp_system.h"
 #include "MicMMS.h"
 #include "config.h"
-#include "esp_system.h"
 
 MicMMS::MicMMS(const char* ssid, const char* password, const char* mqtt_server, int mqtt_port, const char* dp_name, const char* mac_no, int slaveId, HardwareSerial& serialPort, const char* ip_address, const char* gateway_address, const char* subnet_mask, const char* vrs_code)
   : wifiClient(), mqttClient(wifiClient), ssid(ssid), password(password), mqtt_server(mqtt_server), mqtt_port(mqtt_port), dp_name(dp_name), mac_no(mac_no), slaveId(slaveId), serialPort(serialPort), modbus(slaveId, serialPort, 0), vrs_code(vrs_code) {
   ip.fromString(ip_address);
   gateway.fromString(gateway_address);
   subnet.fromString(subnet_mask);
-  ip1.fromString(ip_address1);  // IP for Rx Data from GOT
 }
 
 void MicMMS::setupWiFi() {
@@ -34,7 +34,7 @@ void MicMMS::setupWiFi() {
   //   Serial.printf("%d networks found:\n", n);
   //   for (int i = 0; i < n; ++i) {
   //     // Print SSID and RSSI for each network found
-  //     Serial.printf("%d: %s, Signal: %d dBm, BSSID: %s, Channel: %d\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.BSSIDstr(i).c_str(), WiFi.channel(i));
+  //     // Serial.printf("%d: %s, Signal: %d dBm, BSSID: %s, Channel: %d\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.BSSIDstr(i).c_str(), WiFi.channel(i));
   //   }
   // }
   // Find the network with the best RSSI value
@@ -80,13 +80,6 @@ void MicMMS::setupWiFi() {
   }
 }
 
-// callback fucn when read or write data modbus
-uint16_t MicMMS::onModbusRequest(TRegister* reg, uint16_t val) {
-  lastGotSignalTime = millis();  // Last time update for get signal from GOT
-  check = 1;
-  return val;  // return value to Register
-}
-
 void MicMMS::reconnect() {
   if (!mqttClient.connected()) {
     Serial.println("Attempting MQTT connection...");
@@ -108,20 +101,12 @@ void MicMMS::reconnect() {
 
 void MicMMS::init() {
   std::vector<std::vector<String>> def_tb;
-  pinMode(Pinled1, OUTPUT);  //Publish pin
-  pinMode(Pinled2, OUTPUT);  //Connect Internet pin
+  pinMode(Pinled1, OUTPUT);  //Publish
+  pinMode(Pinled2, OUTPUT);  //Connect
 
   Serial.begin(115200);
-  Ethernet.begin(mac, ip1);
-  if (ESP32 == 2) {
-    /* ------ "Running on ESP32-S2" ------*/
-    Ethernet.init(34);  //Slave select (SS) Pin
-  } else if (ESP32 == 3) {
-    /* ------ "Running on ESP32-S3" ------*/
-    Ethernet.init(10);  //Slave select (SS) Pin
-  }
-  modbus.server();
-  server.begin();
+  /*---- Pin ESP32S2 for Serial RS232 UART Rx 18, Tx 17 ----*/
+  Serial1.begin(115200, SERIAL_8N1, /*rx =*/rsRx, /*tx =*/rsTx);
   setupWiFi();
   Serial.print("MAC address: ");
   Serial.println(WiFi.macAddress());
@@ -129,20 +114,12 @@ void MicMMS::init() {
   Serial.println(WiFi.localIP());
   mqttClient.setServer(mqtt_server, mqtt_port);
   mqttClient.setBufferSize(1024);   // Config the size, in bytes, of the internal send/receive buffer
-  mqttClient.setKeepAlive(30);      // Config Keep-alive 30s
+  mqttClient.setKeepAlive(60);      // Config Keep-alive 30s
   mqttClient.setSocketTimeout(10);  // Config Socket timeout 10s
 
   digitalWrite(Pinled2, HIGH);
   init_heap = esp_get_free_heap_size();
-  for (int i = 0; i < num_got_data; i++) {
-    modbus.addReg(HREG(i));
-    // Add callback for Read and Write Modbus Register at Address 1
-    // modbus.onGet(HREG(i), onModbusRequest);  // Detect when GOT reads data
-    // Use Lambda function instead of calling a non-static function
-    modbus.onSet(HREG(i), [this](TRegister* reg, uint16_t val) -> uint16_t {
-      return this->onModbusRequest(reg, val);
-    });  // Detect when GOT write data
-  }
+  modbus.start();
 }
 
 bool MicMMS::publishMessage(char* topic, const char* message) {
@@ -157,40 +134,13 @@ bool MicMMS::publishMessage(char* topic, const char* message) {
 }
 
 void MicMMS::run() {
-  // Check the client's connection to the server.
-  EthernetClient client = server.available();
-  modbus.task();
-  /*-------------- record raw data to table --------------*/
-  unsigned long long int start = micros();
-  for (int i = 0; i < num_got_data; i++) {
-    got_data[i] = modbus.Reg(HREG(i));
-  }
-  for (int j = 0; j < sizeof(def_tb) / sizeof(def_tb[0]); j++) {
-    def_tb[j][3] = got_data[(def_tb[j][1].toInt()) - 1];
-  }
-  // for (int k = 109; k < 155; k++) {
-  //   Serial.print(modbus.Reg(HREG(k)));
-  //   Serial.print(got_data[k]);
-  //   Serial.print(": ");
-  // }
-  // Serial.println();
-  // Check the signal is received from the GOT within 3 seconds.
-  if (millis() - lastGotSignalTime > GOT_TIMEOUT) {
-    modb_check = 0;
-    check = 0;  // No signal from GOT for 3 seconds
-    // printf("No signal from GOT. check = %d\n", check);
-  } else {
-    // printf("Signal from GOT detected. check = %d\n", check);
-    modb_check = 1;
-  }
-  ct_read = micros() - start;
-  //interval work loop 2.2-2.5 ms
+  modbus.poll(got_data, num_got_data);
 }
 
 void MicMMS::start() {
   if (ESP32 == 2) {
     Serial.println("Running on ESP32-S2");
-    // xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
+    xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
     xTaskCreatePinnedToCore(Network_Task, "Task1", 10000, this, 6, NULL, 0);
     xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, this, 5, NULL, 0);
     xTaskCreatePinnedToCore(func2_Task, "Task3", 10000, this, 4, NULL, 0);
@@ -199,7 +149,7 @@ void MicMMS::start() {
     xTaskCreatePinnedToCore(esp_Task, "Task6", 10000, this, 1, NULL, 0);
   } else if (ESP32 == 3) {
     Serial.println("Running on ESP32-S3");
-    // xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
+    xTaskCreatePinnedToCore(modbus_Task, "Task0", 10000, this, 7, NULL, 0);
     xTaskCreatePinnedToCore(Network_Task, "Task1", 10000, this, 6, NULL, 1);
     xTaskCreatePinnedToCore(func1_Task, "Task2", 10000, this, 5, NULL, 0);
     xTaskCreatePinnedToCore(func2_Task, "Task3", 10000, this, 4, NULL, 0);
@@ -210,6 +160,25 @@ void MicMMS::start() {
     Serial.println("Running on ESP32-C6");*/
   } else {
     Serial.println("Unknown ESP32 variant");
+  }
+}
+
+void MicMMS::modbus_Task(void* pvParam) {
+  MicMMS* instance = (MicMMS*)pvParam;
+  while (1) {
+    //record raw data to table
+    unsigned long long int start = micros();
+    for (int i = 0; i < sizeof(def_tb) / sizeof(def_tb[0]); i++) {
+      def_tb[i][3] = got_data[(def_tb[i][1].toInt()) - 1];
+    }
+    // for (int i = 43; i < 55; i++) {
+    //   Serial.print(got_data[i]);
+    //   Serial.print(":");
+    // }
+    // Serial.println();
+    ct_read = micros() - start;
+    //interval work loop 550-600 microsec
+    vTaskDelay(pdMS_TO_TICKS(itr_modbus));  //loop get value every 100 sec
   }
 }
 
@@ -445,17 +414,31 @@ void MicMMS::broke_modbus_Task(void* pvParam) {  //Check modbus,Broker alive
     unsigned long long int start = millis();
     StaticJsonDocument<200> json_4;
     String json_topic4;
-
     if (instance->mqttClient.connected()) {
       bkr_connect = 1;
     } else {
       bkr_connect = 0;
     }
-    // Serial.println(modb_check);
     json_4["mac_id"] = WiFi.macAddress();
     json_4["broker"] = bkr_connect;
-    json_4["modbus"] = modb_check;                                                                 // Modbus Ethernet
-    json_4["version"] = vrs_Code->vrs_code;                                                        // code version
+
+    query_check1 = instance->modbus.getInCnt();   //Get input messages counter value and return input messages counter
+    query_check2 = instance->modbus.getOutCnt();  //Get transmitted messages counter value and return transmitted messages counter
+    // printf("query_check1 : %d,query_temp1 : %d,query_check2 : %d,query_temp2 : %d\n", query_check1, query_temp1, query_check2, query_temp2);
+
+    if ((start - prv_time_2) >= 5000) {  //Check data from GOT evert 5s
+      if ((query_check1 == query_temp1) && (query_check2 == query_temp2)) {
+        modb_check = 0;
+      } else {
+        modb_check = 1;
+      }
+      prv_time_2 = start;
+      query_temp1 = query_check1;
+      query_temp2 = query_check2;
+    }
+    json_4["modbus"] = modb_check;
+    json_4["version"] = vrs_Code->vrs_code;  // code version
+
     if (((bkr_connect == 1) && (tigger_1 == 1)) || ((start - prv_time_1) >= (5 * (60 * 1000)))) {  // Use tigger = 1 for Publish first time And Publish data every 5 mins.
       serializeJson(json_4, json_topic4);
       instance->publishMessage(topic_pub, json_topic4.c_str());
@@ -476,6 +459,8 @@ void MicMMS::esp_Task(void* pvParam) {  //ESP status
   strcpy(topic_pub, topic_esp_health);
   strcat(topic_pub, dpName->dp_name);
   strcat(topic_pub, macNo->mac_no);
+  //strcpy(topic_pub, mcNo->mc_no);
+  //strcat(topic_pub, topic_esp_health);
 
   while (1) {
     unsigned long long int start = millis();
